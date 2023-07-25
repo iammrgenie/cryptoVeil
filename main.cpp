@@ -1,27 +1,22 @@
+#include <openabe/openabe.h>
+#include <openabe/zsymcrypto.h>
+#include <openssl/conf.h>
+#include <openssl/evp.h>
+#include <openssl/err.h>
+#include <openssl/rand.h>
+#include <string.h>
 #include <iostream>
 #include <string>
 #include <cassert>
-#include <openabe/openabe.h>
-#include <openabe/zsymcrypto.h>
-#include <openssl/evp.h>
-#include <openssl/rand.h>
-#include <openssl/rsa.h>
-#include <openssl/pem.h>
-#include <openssl/err.h>
 
 using namespace std;
 using namespace oabe;
 using namespace oabe::crypto;
 
-
-// Function to generate an AES Key for Video Encryption
-vector<unsigned char> generateKey(int keySize){
-    vector<unsigned char> key(keySize);
-    if(RAND_bytes(key.data(), keySize) != 1) {
-        cerr << "Error Generating Key." << endl;
-        exit(EXIT_FAILURE);
-    }
-    return key;
+void handleErrors(void)
+{
+    ERR_print_errors_fp(stderr);
+    abort();
 }
 
 // Function to convert String back to Hex Vector
@@ -37,152 +32,296 @@ vector<unsigned char> hexString2Vector (const string& inputstr) {
     return res;
 }
 
-// Function to generate RSA key pair
-RSA* genRSAKeyPair() {
-    RSA* rsaKeyPair = RSA_new();
-    BIGNUM* exponent = BN_new();
-
-    // Initialize the exponent to 65537 (RSA_F4)
-    if (BN_set_word(exponent, RSA_F4) != 1) {
-        cerr << "Error setting RSA exponent." << endl;
+// Function to generate a 256 AES Key for Video Encryption
+int generateKey(unsigned char *key){
+    const int Key_Size = 32; 
+    //unsigned char key[Key_Size];
+    if(RAND_bytes(key, Key_Size) != 1) {
+        cerr << "Error Generating Key." << endl;
         exit(EXIT_FAILURE);
     }
-
-    if (RSA_generate_key_ex(rsaKeyPair, 2048, exponent, nullptr) != 1) {
-        cerr << "Error generating RSA key pair." << endl;
-        RSA_free(rsaKeyPair);
-        BN_free(exponent);
-        exit(EXIT_FAILURE);
-    }
-
-    BN_free(exponent);
-    return rsaKeyPair;
+    return 0;
 }
 
-// Function to perform RSA encryption
-vector<unsigned char> RSAencrypt(const std::string& msg, RSA* pKey) {
-    int KeySize = RSA_size(pKey);
-    vector<unsigned char> ciphertextData(KeySize);
+// Function to generate a random 16 byte IV
+int generateIV(unsigned char *iv){
+    const int ivSize = 16; 
+    if(RAND_bytes(iv, ivSize) != 1) {
+        cerr << "Error Generating IV." << endl;
+        exit(EXIT_FAILURE);
+    }
+    return 0;
+}
 
-    int outSize = RSA_public_encrypt(msg.size(), reinterpret_cast<const unsigned char*>(msg.c_str()), ciphertextData.data(), pKey, RSA_PKCS1_PADDING);
+//Function to perform AES Encryption
+int encryptAES(unsigned char *plaintext, int plaintext_len, unsigned char *key, unsigned char *iv, unsigned char *ciphertext)
+{
+    EVP_CIPHER_CTX *ctx;
+    int len;
+    int ciphertext_len;
 
-    if (outSize == -1) {
-        std::cerr << "Error during encryption: " << ERR_error_string(ERR_get_error(), nullptr) << std::endl;
+    /* Create and initialise the context */
+    if(!(ctx = EVP_CIPHER_CTX_new()))
+        handleErrors();
+
+    if(1 != EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv))
+        handleErrors();
+
+    if(1 != EVP_EncryptUpdate(ctx, ciphertext, &len, plaintext, plaintext_len))
+        handleErrors();
+    ciphertext_len = len;
+
+    if(1 != EVP_EncryptFinal_ex(ctx, ciphertext + len, &len))
+        handleErrors();
+    ciphertext_len += len;
+
+    /* Clean up */
+    EVP_CIPHER_CTX_free(ctx);
+
+    return ciphertext_len;
+}
+
+//Function to perform AES Decryption
+int decryptAES(unsigned char *ciphertext, int ciphertext_len, unsigned char *key, unsigned char *iv, unsigned char *plaintext)
+{
+    EVP_CIPHER_CTX *ctx;
+
+    int len;
+
+    int plaintext_len;
+
+    /* Create and initialise the context */
+    if(!(ctx = EVP_CIPHER_CTX_new()))
+        handleErrors();
+
+    if(1 != EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv))
+        handleErrors();
+
+    if(1 != EVP_DecryptUpdate(ctx, plaintext, &len, ciphertext, ciphertext_len))
+        handleErrors();
+    plaintext_len = len;
+
+    if(1 != EVP_DecryptFinal_ex(ctx, plaintext + len, &len))
+        handleErrors();
+    plaintext_len += len;
+
+    /* Clean up */
+    EVP_CIPHER_CTX_free(ctx);
+
+    return plaintext_len;
+}
+
+//Function to Generate ECC Key pair using EVP
+EVP_PKEY* generateECCKeyPair() {
+    EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_EC, NULL);
+    if (!ctx) {
+        cerr << "Error creating EVP_PKEY context." << endl;
         exit(EXIT_FAILURE);
     }
 
-    ciphertextData.resize(outSize);
-    return ciphertextData;
-}
-
-// Function to compute RSA Decryption
-string RSAdecrypt(const vector<unsigned char>& ciphertextData, RSA* sKey) {
-    int KeySize = RSA_size(sKey);
-    vector<unsigned char> plaintextData(KeySize);
-
-    int outSize = RSA_private_decrypt(ciphertextData.size(), ciphertextData.data(), plaintextData.data(), sKey, RSA_PKCS1_PADDING);
-
-    if (outSize == -1) {
-        std::cerr << "Error during decryption: " << ERR_error_string(ERR_get_error(), nullptr) << std::endl;
+    if (EVP_PKEY_keygen_init(ctx) != 1) {
+        cerr << "Error initializing EVP_PKEY key generation." << endl;
+        EVP_PKEY_CTX_free(ctx);
         exit(EXIT_FAILURE);
     }
 
-    return string(reinterpret_cast<char*>(plaintextData.data()), outSize);
+    // Set the curve name (you can choose a different curve if desired)
+    if (EVP_PKEY_CTX_set_ec_paramgen_curve_nid(ctx, NID_X9_62_prime256v1) != 1) {
+        cerr << "Error setting ECC curve." << endl;
+        EVP_PKEY_CTX_free(ctx);
+        exit(EXIT_FAILURE);
+    }
+
+    EVP_PKEY* eccKeyPair = NULL;
+    if (EVP_PKEY_keygen(ctx, &eccKeyPair) != 1) {
+        cerr << "Error generating ECC key pair." << endl;
+        EVP_PKEY_CTX_free(ctx);
+        EVP_PKEY_free(eccKeyPair);
+        exit(EXIT_FAILURE);
+    }
+
+    EVP_PKEY_CTX_free(ctx);
+    return eccKeyPair;
 }
 
-int main() 
-{   
-    //Initialize OpenSSL PKE Functions
-    OpenSSL_add_all_algorithms();
-    ERR_load_crypto_strings();
-
-    //Initialize the ABE Context
-    InitializeOpenABE();
-
-    cout << "\n******************* CryptoVeil - CP-ABE Test Implementation ******************************\n" << endl;
-
-    const int Key_Size = 32;                                        //Using 32bit key size for AES 256
-    vector<unsigned char> key1 = generateKey(Key_Size);             //Generate an AES256 key
-    
-    //Print and convert key to String
-    stringstream sskey;
-    cout << "Generated Key: ";
-    for (const auto& byte : key1) {
-        cout << hex << static_cast<int>(byte);
-        sskey << hex << setw(2) << setfill('0') << static_cast<int>(byte);
+// Function to export the EVP_PKEY Private in PEM format
+string exportPrivToPEM(EVP_PKEY* pkey) {
+    BIO* bio = BIO_new(BIO_s_mem());
+    if (!bio) {
+        cerr << "Error creating BIO." << endl;
+        exit(EXIT_FAILURE);
     }
-    cout << endl;
 
-    string K1 = sskey.str();
-    cout << "Converted Key: " << K1 << endl;
-
-    //Specify the specific ABE scheme context and PKE context being used
-    OpenABECryptoContext cpabe("CP-ABE");
-
-    string cipher1, decryptedtext;
-
-    //Generate MSK and MPK
-    string mpk, msk;
-
-    cpabe.generateParams();                                         //Function to generate the msk and mpk
-    cpabe.exportSecretParams(msk);
-    cpabe.exportPublicParams(mpk);
-
-    cout << "\nMSK: " << msk << endl;
-    cout << "\nMPK: " << mpk << endl;
-
-    //Generate decryption keys with different attributes
-    string AlexDK, EugeneDK;
-    cpabe.keygen("|attr1|attr2|attr3", "key0");
-    cpabe.keygen("|attr1|attr3", "key1");
-    cpabe.exportUserKey("key0", AlexDK);
-    cpabe.exportUserKey("key1", EugeneDK);
-
-
-    //Encrypt the given plaintexts with different policies
-    cpabe.encrypt("attr1 and attr3", K1, cipher1);
-    //cpabe.encrypt("attr1 and attr2 and attr3", pl2, ct2);
-
-
-    //Test Decryption and verify that the decryption works
-    bool result = cpabe.decrypt("key1", cipher1, decryptedtext);
-
-    assert(result && K1 == decryptedtext);
-
-    cout << "\nRecovered message: " << decryptedtext << endl;
-
-    vector<unsigned char> key2 = hexString2Vector(decryptedtext);
-    
-    cout << "Converted Decrypted Key: ";
-    for (const auto& byte : key2) {
-        cout << hex << static_cast<int>(byte);
+    if (PEM_write_bio_PrivateKey(bio, pkey, NULL, NULL, 0, NULL, NULL) != 1) {
+        cerr << "Error exporting EVP_PKEY Private Key to PEM format." << endl;
+        BIO_free_all(bio);
+        EVP_PKEY_free(pkey);
+        exit(EXIT_FAILURE);
     }
-    cout << endl;
 
-    // =========================================================================================================== //
-    string C_mpk, P_mpk;
+    char* buffer;
+    long length = BIO_get_mem_data(bio, &buffer);
+    string pemKey(buffer, length);
 
-    RSA* rsaKeyPair = genRSAKeyPair();
+    BIO_free_all(bio);
+    return pemKey;
+}
 
-    //Export the public and secret keys
-    RSA* publicKey = RSAPublicKey_dup(rsaKeyPair);
-    RSA* privateKey = RSAPrivateKey_dup(rsaKeyPair);
-    RSA_free(rsaKeyPair);
+// Function to export the EVP_PKEY Public in PEM format
+string exportPubToPEM(EVP_PKEY* pkey) {
+    BIO* bio = BIO_new(BIO_s_mem());
+    if (!bio) {
+        cerr << "Error creating BIO." << endl;
+        exit(EXIT_FAILURE);
+    }
 
-    string dummydata = "Hello, Testing Encryption";
+    if (PEM_write_bio_PUBKEY(bio, pkey) != 1) {
+        cerr << "Error exporting EVP_PKEY Public key to PEM format." << endl;
+        BIO_free_all(bio);
+        EVP_PKEY_free(pkey);
+        exit(EXIT_FAILURE);
+    }
 
-    //Encrypt the generate MPK
-    vector<unsigned char> c_mpk = RSAencrypt(dummydata, publicKey);
+    char* buffer;
+    long length = BIO_get_mem_data(bio, &buffer);
+    string pemPublicKey(buffer, length);
 
-    //Decrypt and verify the mpk
-    P_mpk = RSAdecrypt(c_mpk, privateKey);
-    cout << "Decrypted MPK: " << P_mpk << endl;
+    BIO_free_all(bio);
+    return pemPublicKey;
+}
 
-    //Shutdown and clean up
-    ShutdownOpenABE();
-    RSA_free(publicKey);
-    RSA_free(privateKey);
-    EVP_cleanup();
+
+int envelope_seal(EVP_PKEY **pub_key, unsigned char *plaintext, int plain_len, unsigned char **encrypted_key, int *encrypted_key_len, unsigned char *iv,
+	unsigned char *ciphertext)
+{
+	EVP_CIPHER_CTX *ctx;
+	int cipher_len;
+
+	int len;
+
+	/* Create and initialise the context */
+	if(!(ctx = EVP_CIPHER_CTX_new())) handleErrors();
+
+	/* Initialise the envelope seal operation. This operation generates
+	 * a key for the provided cipher, and then encrypts that key a number
+	 * of times (one for each public key provided in the pub_key array). In
+	 * this example the array size is just one. This operation also
+	 * generates an IV and places it in iv. */
+	if(1 != EVP_SealInit(ctx, EVP_aes_256_cbc(), encrypted_key,
+		encrypted_key_len, iv, pub_key, 1))
+		handleErrors();
+
+	/* Provide the message to be encrypted, and obtain the encrypted output.
+	 * EVP_SealUpdate can be called multiple times if necessary
+	 */
+	if(1 != EVP_SealUpdate(ctx, ciphertext, &len, plaintext, plain_len))
+		handleErrors();
+	cipher_len = len;
+
+	/* Finalise the encryption. Further ciphertext bytes may be written at
+	 * this stage.
+	 */
+	if(1 != EVP_SealFinal(ctx, ciphertext + len, &len)) handleErrors();
+	cipher_len += len;
+
+	/* Clean up */
+	EVP_CIPHER_CTX_free(ctx);
+
+	return cipher_len;
+}
+
+int envelope_open(EVP_PKEY *priv_key, unsigned char *ciphertext, int cipher_len, unsigned char *encrypted_key, int encrypted_key_len, unsigned char *iv,
+	unsigned char *plaintext)
+{
+	EVP_CIPHER_CTX *ctx;
+
+	int len;
+	int plain_len;
+
+
+	/* Create and initialise the context */
+	if(!(ctx = EVP_CIPHER_CTX_new())) handleErrors();
+
+	/* Initialise the decryption operation. The asymmetric private key is
+	 * provided and priv_key, whilst the encrypted session key is held in
+	 * encrypted_key */
+	if(1 != EVP_OpenInit(ctx, EVP_aes_256_cbc(), encrypted_key,
+		encrypted_key_len, iv, priv_key))
+		handleErrors();
+
+	/* Provide the message to be decrypted, and obtain the plaintext output.
+	 * EVP_OpenUpdate can be called multiple times if necessary
+	 */
+	if(1 != EVP_OpenUpdate(ctx, plaintext, &len, ciphertext, cipher_len))
+		handleErrors();
+	plain_len = len;
+
+	/* Finalise the decryption. Further plaintext bytes may be written at
+	 * this stage.
+	 */
+	if(1 != EVP_OpenFinal(ctx, plaintext + len, &len)) handleErrors();
+	plain_len += len;
+
+	/* Clean up */
+	EVP_CIPHER_CTX_free(ctx);
+
+	return plain_len;
+}
+
+
+int main (void)
+{
+    /* A 256 bit key */
+    unsigned char key[32];
+    generateKey(key);
+
+    /* A 128 bit IV */
+    unsigned char iv[16];
+    generateIV(iv);
+
+    /* Message to be encrypted */
+    unsigned char *plaintext =
+        (unsigned char *)"AAAAFqpvySbSGkot3J9UKkIH9XKAi5ZtcGsAAAHToQFBsgEEtLIBACRr0Pw4kCT7nTQtD++gbwQ87TuxM8YYYJILswYu3GBpGuX8BRn3/nDMCpJOHbIsWNgxTQ+y1ysTYhs/OmK0E2gk0H1I7uZQ+y2A52MU3z9eoxSGUtcgLtEIbDSEyi6cJRjPo7b6aeqjjU3g6mmTW0OwfZYK1B2azdHfVyaZTahEA2xoAWeQpLfuChYlF/EZyaKNPj13+3jhIPbquBcmFf0H66JCDBT+PdjWb9SNEyFuB09lQ8fJYu3HERdF6nXMRgi9JLFt/k9z6GwhpSdaf5imBi8PP5tdowdFBpXcWB3QA6Cy9GseYLUh92nhdil1OquOsQoz7bMYvVjsxUkFk72hAmcxoSSyoSECFj9I8L5xxd2jbVbgnfSkpgn7sZ6KLmBJXXz28jYsA+ehA2cxYaEksqEhAiB01KX+eXWZcF6OdgcT9hnksGmibf3KuXkXm7oNHmJjoQJnMqFEs6FBAh/gFMLuBMGCYaoVl21n1HtkVCWOrXtQQCxI4jAnBpMuBaYNONvDKagcdz0DwknbjiwjGync+QAAqVLIHB9kyRyhAWuhJR0AAAAg3So67b2U9pXHWFFNh/qki69/ms/eJdmToQajMKWseSk";
+
+
+    cout << "Size of plaintext = " << strlen ((char *)plaintext) << endl;
+
+    unsigned char ciphertext[1024];
+
+    /* Buffer for the decrypted text */
+    unsigned char decryptedtext[strlen ((char *)plaintext)];
+
+    int decryptedtext_len, ciphertext_len;
+
+    /* Encrypt the plaintext */
+    ciphertext_len = encryptAES(plaintext, strlen ((char *)plaintext), key, iv, ciphertext);
+
+    /* Do something useful with the ciphertext here */
+    printf("Ciphertext is:\n");
+    BIO_dump_fp (stdout, (const char *)ciphertext, ciphertext_len);
+
+    /* Decrypt the ciphertext */
+    decryptedtext_len = decryptAES(ciphertext, ciphertext_len, key, iv, decryptedtext);
+
+    /* Add a NULL terminator. We are expecting printable text */
+    decryptedtext[decryptedtext_len] = '\0';
+
+    /* Show the decrypted text */
+    printf("\nDecrypted text is:\n");
+    printf("%s\n", decryptedtext);
+
+    EVP_PKEY *eccPair = generateECCKeyPair();
+
+    string KeyPrivPem = exportPrivToPEM(eccPair);
+    cout << "\nGenerate ECC Private Key: " << KeyPrivPem << endl;
+
+    string KeyPubPem = exportPubToPEM(eccPair);
+    cout << "\nGenerate ECC Public Key: " << KeyPubPem << endl;
+
+    //envelope_seal(eccPair, )
+
 
     return 0;
 }
+
+
