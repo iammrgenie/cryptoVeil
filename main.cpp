@@ -19,6 +19,8 @@ void handleErrors(void)
     abort();
 }
 
+
+
 // Function to convert String back to Hex Vector
 vector<unsigned char> hexString2Vector (const string& inputstr) {
     vector<unsigned char> res;
@@ -30,6 +32,16 @@ vector<unsigned char> hexString2Vector (const string& inputstr) {
     }
 
     return res;
+}
+
+// Function to convert binary data to hexadecimal string
+string Hex2String(const unsigned char* input, size_t length) {
+    stringstream ss;
+    ss << hex << setfill('0');
+    for (size_t i = 0; i < length; ++i) {
+        ss << setw(2) << static_cast<unsigned>(input[i]);
+    }
+    return ss.str();
 }
 
 // Function to generate a 256 AES Key for Video Encryption
@@ -298,8 +310,8 @@ int main (void)
     cout << "\nMPK: " << mpk << endl;
 
     /* A 256 bit key */
-    unsigned char key[32];
-    generateKey(key);
+    //unsigned char key[32];
+    //generateKey(key);
 
     /* A 128 bit IV */
     unsigned char iv[16];
@@ -310,6 +322,90 @@ int main (void)
     strcpy((char*)plaintext, mpk.c_str());
 
     int plaintext_len = strlen((const char*)plaintext);
+
+    // ========================= RSA Key Generation ==========================================
+    EVP_PKEY *rsaPair = generateRSAKeyPair();
+
+    string KeyPrivPem = exportPrivToPEM(rsaPair);
+    cout << "\nGenerated RSA Private Key: " << KeyPrivPem << endl;
+
+    string KeyPubPem = exportPubToPEM(rsaPair);
+    cout << "\nGenerated RSA Public Key: " << KeyPubPem << endl;
+
+    unsigned char ciphertext[1024];
+    unsigned char *encrypted_key;
+    int encrypted_key_len;
+    int cipher_len;
+
+    cipher_len = envelope_seal(&rsaPair, plaintext, plaintext_len, &encrypted_key, &encrypted_key_len, iv, ciphertext);
+    
+    unsigned char decrypted_text[plaintext_len];
+    int decrypted_len = envelope_open(rsaPair, ciphertext, cipher_len, encrypted_key, encrypted_key_len, iv, decrypted_text);
+
+    decrypted_text[decrypted_len] = '\0';
+
+    /* Output the results */
+    cout << "Original MPK: " << plaintext << endl;
+    cout << "\nDecrypted MPK: " << decrypted_text << endl;
+
+    // ========================= CPABE Decryption Key Generation ==========================================
+    //Generate decryption keys with different attributes
+    string AlexDK, EugeneDK, HosseinDK, AntonisDK;
+    cpabe.keygen("|Ghana|TAU|PhD|Exp = 4|", "Eugene");
+    cpabe.keygen("|Greece|TAU|PhD|Exp = 5|", "Alex");
+    cpabe.keygen("|Iran|TAU|PhD|Exp = 2|", "Hossein");
+    cpabe.keygen("|Greece|TAU|Professor|Exp = 10|", "Antonis");
+
+    cpabe.exportUserKey("Alex", AlexDK);
+    cpabe.exportUserKey("Eugene", EugeneDK);
+    cpabe.exportUserKey("Hossein", HosseinDK);
+    cpabe.exportUserKey("Antonis", AntonisDK);
+
+
+    //Generate Video Encryption Keys : 10 for now
+    const int numKeys = 1;
+    unsigned char video_enc_keys[numKeys][32];
+    string enc_keyStrings[numKeys];
+    string encrypted_vid_keys[numKeys];
+
+    for (int i = 0; i < numKeys; i ++){
+        generateKey(video_enc_keys[i]);
+        //convert the key to a string for CPABE encryption
+        enc_keyStrings[i] = Hex2String(video_enc_keys[i], 32);
+    }
+
+    // Print the generated keys
+    cout << "\nGenerated Video Encryption Keys:" << endl;
+    for (int i = 0; i < numKeys; i++) {
+        cout << "Key " << i + 1 << ": " << enc_keyStrings[i] << endl;
+    }
+
+    //Encrypt the generated keys with different policies
+    cpabe.encrypt("TAU and (Professor or PhD) and Exp > 8", enc_keyStrings[0], encrypted_vid_keys[0]);
+    cout << "\nEncrypted Test Key: " << encrypted_vid_keys[0] << endl;
+
+    //Test Decryption and verify that the decryption works
+    string decrypted_key;
+    if (cpabe.decrypt("Antonis", encrypted_vid_keys[0], decrypted_key)){
+        cout << "\nDecryption successful!" << endl;
+        cout << "Decrypted Key: " << decrypted_key << endl;
+    } else {
+        cout << "\nDecryption failed!" << endl;
+        cout << "Key does not meet the policy on the Ciphertext" << endl;
+    }
+
+    //assert(result && enc_keyStrings[0] == decrypted_key);
+
+    //cout << "\nRecovered key: " << decrypted_key << endl;
+
+    EVP_PKEY_free(rsaPair);
+    EVP_cleanup();
+    return 0;
+}
+
+
+
+
 
     /* Buffer for the decrypted text */
     // unsigned char decryptedtext[plaintext_len];
@@ -337,34 +433,3 @@ int main (void)
 
     // /* Show the decrypted text */
     // printf("\nDecrypted text: %s\n", decryptedtext);
-
-    EVP_PKEY *rsaPair = generateRSAKeyPair();
-
-    string KeyPrivPem = exportPrivToPEM(rsaPair);
-    cout << "\nGenerated RSA Private Key: " << KeyPrivPem << endl;
-
-    string KeyPubPem = exportPubToPEM(rsaPair);
-    cout << "\nGenerated RSA Public Key: " << KeyPubPem << endl;
-
-    unsigned char ciphertext[1024];
-    unsigned char *encrypted_key;
-    int encrypted_key_len;
-    int cipher_len;
-
-    cipher_len = envelope_seal(&rsaPair, plaintext, plaintext_len, &encrypted_key, &encrypted_key_len, iv, ciphertext);
-    
-    unsigned char decrypted_text[plaintext_len];
-    int decrypted_len = envelope_open(rsaPair, ciphertext, cipher_len, encrypted_key, encrypted_key_len, iv, decrypted_text);
-
-    decrypted_text[decrypted_len] = '\0';
-
-    /* Output the results */
-    cout << "Original MPK: " << plaintext << endl;
-    cout << "\nDecrypted MPK: " << decrypted_text << endl;
-
-    EVP_PKEY_free(rsaPair);
-    EVP_cleanup();
-    return 0;
-}
-
-
