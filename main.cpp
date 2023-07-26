@@ -363,7 +363,7 @@ int main (void)
 
 
     //Generate Video Encryption Keys : 10 for now
-    const int numKeys = 1;
+    const int numKeys = 5;
     unsigned char video_enc_keys[numKeys][32];
     string enc_keyStrings[numKeys];
     string encrypted_vid_keys[numKeys];
@@ -381,18 +381,26 @@ int main (void)
     }
 
     //Encrypt the generated keys with different policies
-    cpabe.encrypt("TAU and (Professor or PhD) and Exp > 8", enc_keyStrings[0], encrypted_vid_keys[0]);
-    cout << "\nEncrypted Test Key: " << encrypted_vid_keys[0] << endl;
+    cpabe.encrypt("TAU and (Professor or PhD) and Exp > 4", enc_keyStrings[0], encrypted_vid_keys[0]);
+    cpabe.encrypt("TAU and (Professor or PhD) and Exp > 2", enc_keyStrings[1], encrypted_vid_keys[1]);
+    cpabe.encrypt("TAU and (Professor or PhD) and Exp > 8", enc_keyStrings[2], encrypted_vid_keys[2]);
+    cpabe.encrypt("TAU and Professor and Exp > 8", enc_keyStrings[3], encrypted_vid_keys[3]);
+    cpabe.encrypt("TAU and (Professor or PhD) and Exp > 3", enc_keyStrings[4], encrypted_vid_keys[4]);
+
 
     //Test Decryption and verify that the decryption works
-    string decrypted_key;
-    if (cpabe.decrypt("Antonis", encrypted_vid_keys[0], decrypted_key)){
-        cout << "\nDecryption successful!" << endl;
-        cout << "Decrypted Key: " << decrypted_key << endl;
-    } else {
-        cout << "\nDecryption failed!" << endl;
-        cout << "Key does not meet the policy on the Ciphertext" << endl;
+    string decrypted_keys[numKeys];
+    string user = "Antonis";
+    for (int i = 0; i < numKeys; i ++){
+        if (cpabe.decrypt(user, encrypted_vid_keys[i], decrypted_keys[i])){
+            cout << "Decryption successful!" << endl;
+            cout << "Decrypted Key: " << decrypted_keys[i] << "\n" << endl;
+        } else {
+            cout << "Decryption failed!" << endl;
+            cout << "Key does not meet the policy on the Ciphertext\n" << endl;
+        }
     }
+    
 
     //assert(result && enc_keyStrings[0] == decrypted_key);
 
